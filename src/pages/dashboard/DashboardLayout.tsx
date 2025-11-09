@@ -8,7 +8,7 @@ import { useAuth } from "@/hooks/useAuth";
 
 const navigation = [
   { label: "Overview", to: "/dashboard", icon: LayoutDashboard, exact: true },
-  { label: "My Listings", to: "/dashboard/listings", icon: Package },
+  { label: "My Listings", to: "/dashboard/listings", icon: Package, exact: true },
   { label: "Create Listing", to: "/dashboard/listings/new", icon: PlusCircle },
   { label: "Buying", to: "/dashboard/buying", icon: ShoppingCart },
   { label: "Profile", to: "/dashboard/profile", icon: User },
@@ -28,7 +28,11 @@ const DashboardLayout = () => {
     : user?.email?.charAt(0).toUpperCase() ?? "U";
 
   const renderNavItem = (item: (typeof navigation)[number]) => {
-    const isActive = item.exact ? location.pathname === item.to : location.pathname.startsWith(item.to);
+    // Check for exact match or prefix match with trailing slash
+    const isActive = item.exact 
+      ? location.pathname === item.to 
+      : location.pathname === item.to || location.pathname.startsWith(item.to + '/');
+    
     return (
       <Link
         key={item.to}

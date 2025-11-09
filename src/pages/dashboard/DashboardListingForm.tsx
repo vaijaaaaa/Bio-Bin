@@ -1,6 +1,6 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useForm } from "react-hook-form";
+import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
@@ -9,11 +9,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Spinner } from "@/components/ui/spinner";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { listingSchema, type ListingFormValues } from "@/lib/validators/listing";
 import { createListing, fetchListingById, updateListing } from "@/services/listingService";
+import { supabase } from "@/integrations/supabase/client";
+import { Trash2, Upload, X, ImageIcon, Loader2 } from "lucide-react";
 
 const categories = [
   "Laptop",
@@ -54,6 +55,90 @@ const DashboardListingForm = () => {
     },
   });
   const imageUrls = form.watch("imageUrls") ?? [];
+  const [uploadingImages, setUploadingImages] = useState<boolean>(false);
+
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    const current = form.getValues("imageUrls") ?? [];
+    if (current.length + files.length > 5) {
+      toast({
+        title: "Too many images",
+        description: "You can upload maximum 5 images",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setUploadingImages(true);
+    const uploadedUrls: string[] = [];
+
+    try {
+      for (const file of Array.from(files)) {
+        // Validate file type
+        if (!file.type.startsWith("image/")) {
+          toast({
+            title: "Invalid file type",
+            description: `${file.name} is not an image file`,
+            variant: "destructive",
+          });
+          continue;
+        }
+
+        // Validate file size (max 5MB)
+        if (file.size > 5 * 1024 * 1024) {
+          toast({
+            title: "File too large",
+            description: `${file.name} exceeds 5MB limit`,
+            variant: "destructive",
+          });
+          continue;
+        }
+
+        // Create unique filename
+        const fileExt = file.name.split(".").pop();
+        const fileName = `${user!.id}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+
+        // Upload to Supabase storage
+        const { data, error } = await supabase.storage
+          .from("listing-images")
+          .upload(fileName, file, {
+            cacheControl: "3600",
+            upsert: false,
+          });
+
+        if (error) {
+          throw error;
+        }
+
+        // Get public URL
+        const { data: { publicUrl } } = supabase.storage
+          .from("listing-images")
+          .getPublicUrl(data.path);
+
+        uploadedUrls.push(publicUrl);
+      }
+
+      if (uploadedUrls.length > 0) {
+        form.setValue("imageUrls", [...current, ...uploadedUrls]);
+        toast({
+          title: "Images uploaded",
+          description: `Successfully uploaded ${uploadedUrls.length} image(s)`,
+        });
+      }
+    } catch (error: any) {
+      toast({
+        title: "Upload failed",
+        description: error.message || "Failed to upload images",
+        variant: "destructive",
+      });
+    } finally {
+      setUploadingImages(false);
+      // Reset input
+      event.target.value = "";
+    }
+  };
 
   const handleAddImage = () => {
     const current = form.getValues("imageUrls") ?? [];
@@ -163,7 +248,7 @@ const DashboardListingForm = () => {
   if (listingLoading) {
     return (
       <Card className="flex min-h-[320px] items-center justify-center">
-        <Spinner size="lg" />
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </Card>
     );
   }
@@ -298,37 +383,84 @@ const DashboardListingForm = () => {
 
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <Label>Image URLs</Label>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleAddImage}
-              disabled={imageUrls.length >= 5}
-            >
-              Add image
-            </Button>
+            <Label>Images</Label>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => document.getElementById("image-upload")?.click()}
+                disabled={imageUrls.length >= 5 || uploadingImages}
+                className="gap-2"
+              >
+                {uploadingImages ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-4 w-4" />
+                    Upload images
+                  </>
+                )}
+              </Button>
+              <input
+                id="image-upload"
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={handleImageUpload}
+                disabled={imageUrls.length >= 5 || uploadingImages}
+              />
+            </div>
           </div>
 
-          {imageUrls.length ? (
-            <div className="space-y-3">
-              {imageUrls.map((_, index) => (
-                <div key={index} className="flex items-center gap-3">
-                  <Input
-                    placeholder="https://"
-                    {...form.register(`imageUrls.${index}` as const)}
-                    className="flex-1"
-                  />
-                  <Button type="button" variant="ghost" onClick={() => handleRemoveImage(index)}>
-                    Remove
-                  </Button>
+          {imageUrls.length > 0 ? (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {imageUrls.map((url, index) => (
+                <div key={index} className="group relative aspect-square overflow-hidden rounded-lg border border-border bg-muted">
+                  {url ? (
+                    <>
+                      <img
+                        src={url}
+                        alt={`Listing image ${index + 1}`}
+                        className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                        onError={(e) => {
+                          e.currentTarget.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect fill='%23f0f0f0' width='100' height='100'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='14' fill='%23999'%3ENo Image%3C/text%3E%3C/svg%3E";
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="icon"
+                        className="absolute right-2 top-2 h-8 w-8 opacity-0 transition-opacity group-hover:opacity-100"
+                        onClick={() => handleRemoveImage(index)}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </>
+                  ) : (
+                    <div className="flex h-full w-full flex-col items-center justify-center gap-2">
+                      <ImageIcon className="h-8 w-8 text-muted-foreground" />
+                      <p className="text-xs text-muted-foreground">Invalid URL</p>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">
-              Add up to five image URLs to showcase your listing. Cloud storage or CDN links work best.
-            </p>
+            <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted/20 p-8 text-center">
+              <ImageIcon className="mb-3 h-12 w-12 text-muted-foreground/50" />
+              <p className="mb-1 text-sm font-medium text-foreground">No images uploaded</p>
+              <p className="text-xs text-muted-foreground">
+                Upload up to 5 images to showcase your listing
+              </p>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Supported formats: JPG, PNG, GIF (max 5MB each)
+              </p>
+            </div>
           )}
 
           {form.formState.errors.imageUrls && (
@@ -341,7 +473,7 @@ const DashboardListingForm = () => {
             Cancel
           </Button>
           <Button type="submit" disabled={isSubmitting} className="gap-2">
-            {isSubmitting && <Spinner size="sm" />}
+            {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
             {isEdit ? "Save changes" : "Create listing"}
           </Button>
         </div>
